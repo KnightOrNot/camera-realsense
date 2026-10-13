@@ -1,0 +1,19 @@
+[project]
+name = "camera-realsense"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "RightOrNot", email = "jue1251665735@outlook.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pyrealsense2>=2.59.1.11053",
+]
+
+[project.scripts]
+camera-realsense = "camera_realsense:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
