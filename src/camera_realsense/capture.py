@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
+from typing import Callable
 
 import pyrealsense2 as rs
 
@@ -11,15 +12,17 @@ from .diagnostics import log
 from .models import CaptureConfig, CaptureStats, VideoConfig
 
 
-def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finished=None) -> CaptureStats:
+def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finished=None,
+            report: Callable[[CaptureStats, float, bool], None] | None = None) -> CaptureStats:
     """Poll with per-stream watchdogs; even an empty stream has a finite deadline."""
     stats = CaptureStats(counts={name: 0 for name in expected})
     start = time.monotonic()
     last_seen: dict[str, float] = {name: start for name in expected}
     next_warning: dict[str, float] = {name: start + config.timeout_ms / 1000 for name in expected}
     streak: dict[str, int] = {name: 0 for name in expected}
-    last_report = start
     try:
+        if report:
+            report(stats, start, True)
         while time.monotonic() - start < config.duration:
             if preview and not preview.pump():
                 stats.reason = "window closed"
@@ -43,18 +46,17 @@ def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finish
                     next_warning[name] = now + config.timeout_ms / 1000
                 log(f"超时：{', '.join(stalled)} 连续 {config.timeout_ms} ms 未收到新数据 "
                     f"（累计 {stats.timeouts} 次）。")
+            if report:
+                report(stats, now, False)
             if any(count >= config.max_timeouts for count in streak.values()):
                 stats.reason = "timeout limit"
                 break
             if finished and finished():
                 stats.reason = "artifact saved"
                 break
-            if config.frames and stats.complete_frames >= config.frames:
+            if frame_target_reached(config, stats):
                 stats.reason = "frame target"
                 break
-            if now - last_report >= 1:
-                log(f"采集中 {now - start:.1f}s：{stats.counts}")
-                last_report = now
             if not frames:
                 time.sleep(0.005)
     except KeyboardInterrupt:
@@ -63,7 +65,17 @@ def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finish
         end = time.monotonic()
         stats.elapsed_s = end - start
         stats.max_gap_s = max(stats.max_gap_s, *(end - t for t in last_seen.values()))
+        if report:
+            report(stats, end, True)
     return stats
+
+
+def frame_target_reached(config: CaptureConfig, stats: CaptureStats) -> bool:
+    return config.frames > 0 and stats.complete_frames >= config.frames
+
+
+def warmup_complete(config: CaptureConfig, complete_frames: int) -> bool:
+    return complete_frames > config.warmup_frames
 
 
 def configure_video(config: VideoConfig, device, mode):

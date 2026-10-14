@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import replace
+from functools import partial
 
 import numpy as np
 import pyrealsense2 as rs
 
 from . import capture, device, diagnostics, processing, storage
 from .models import ExperimentConfig, VideoQuality
-from .preview import Preview
+from .preview import preview_session, show_preview
 
 
 def video_mode(config: ExperimentConfig) -> str:
@@ -23,6 +22,45 @@ def video_mode(config: ExperimentConfig) -> str:
 
 
 def run_video(config: ExperimentConfig) -> int:
+    with diagnostics.status_session(video_mode(config)) as status:
+        return _run_video(config, status)
+
+
+def update_video_quality(selected: dict, new: set[str], config: ExperimentConfig,
+                         quality: VideoQuality) -> None:
+    """Depth measurement (--pixel) and color diagnostics are reusable frame features."""
+    if "color" in new:
+        quality.color_statistics = processing.color_statistics(selected["color"])
+    if "depth" in selected:
+        depth = selected["depth"].as_depth_frame()
+        selected["depth"] = depth
+        quality.units_m = depth.get_units()
+        if "depth" in new:
+            quality.measurement = processing.measure_depth(depth, config.video.pixel)
+            quality.valid_depth_frames += int(quality.measurement.valid_ratio > 0)
+
+
+def save_snapshot(folder, selected: dict, quality: VideoQuality, max_depth: float) -> None:
+    """Apply --output-dir once, preserving raw depth and metadata."""
+    if folder is None or quality.saved:
+        return
+    storage.save_images(folder, processing.prepare_snapshot(selected, max_depth))
+    if "depth" in selected:
+        quality.saved_depth_valid = bool(np.count_nonzero(np.asanyarray(selected["depth"].get_data())))
+    quality.saved = True
+
+
+def export_pointcloud(depth, color, path, quality: VideoQuality, max_depth: float) -> None:
+    """Apply --colored / --max-depth and export the first nonempty cloud."""
+    if depth is None or quality.cloud_saved:
+        return
+    vertices, colors = processing.cloud_arrays(depth, color, max_depth)
+    if len(vertices):
+        storage.write_ply(path, vertices, colors)
+        quality.cloud_saved = True
+
+
+def _run_video(config: ExperimentConfig, status: diagnostics.CaptureStatus) -> int:
     camera = device.select_device(config.serial)
     cfg, expected = capture.configure_video(config.video, camera, video_mode(config))
     folder = config.output.output_dir
@@ -36,12 +74,11 @@ def run_video(config: ExperimentConfig) -> int:
     quality = VideoQuality()
     complete_observed = 0
     last_numbers = {}
-    last_print = 0.0
     preview = None
     aligner = rs.align(rs.stream.color) if config.command == "align" else None
 
     def consume(frames):
-        nonlocal complete_observed, last_print
+        nonlocal complete_observed
         selected = {}
         for name in expected:
             frame = frames.first_or_default(getattr(rs.stream, name))
@@ -51,69 +88,39 @@ def run_video(config: ExperimentConfig) -> int:
                if last_numbers.get(name) != frame.get_frame_number()}
         for name in new:
             last_numbers[name] = selected[name].get_frame_number()
-        if "color" in new:
-            quality.color_statistics = processing.color_statistics(selected["color"])
+        update_video_quality(selected, new, config, quality)
+        if quality.measurement:
+            status.details = diagnostics.format_depth_measurement(quality.measurement)
         depth = selected.get("depth")
-        if depth is not None:
-            depth = depth.as_depth_frame()
-            selected["depth"] = depth
-            raw = np.asanyarray(depth.get_data())
-            quality.units_m = depth.get_units()
-            if "depth" in new:
-                quality.valid_depth_frames += int(np.count_nonzero(raw) > 0)
-                if time.monotonic() - last_print >= 1:
-                    measurement = processing.measure_depth(depth, config.video.pixel)
-                    x, y = measurement.pixel
-                    distance = f"{measurement.distance_m:.3f} m" if measurement.distance_m else "无有效深度"
-                    diagnostics.log(f"depth #{depth.get_frame_number()}：像素({x},{y}) {distance}；"
-                                    f"整帧有效像素 {measurement.valid_ratio:.1%}")
-                    last_print = time.monotonic()
         if not set(expected).issubset(selected) or not new:
             return new
         if set(expected).issubset(new):
             complete_observed += 1
-        if complete_observed <= config.capture.warmup_frames:
+        if not capture.warmup_complete(config.capture, complete_observed):
             return new
         if aligner:
             selected = processing.align_to_color(frames, aligner)
             if not selected:
                 return new
             quality.aligned_valid_frames += int(np.count_nonzero(np.asanyarray(selected["depth"].get_data())) > 0)
-        if folder and not quality.saved:
-            storage.save_images(folder, processing.prepare_snapshot(selected, config.video.max_depth))
-            if "depth" in selected:
-                quality.saved_depth_valid = bool(np.count_nonzero(np.asanyarray(selected["depth"].get_data())))
-            quality.saved = True
-        if config.command == "pointcloud" and not quality.cloud_saved and depth is not None:
-            vertices, colors = processing.cloud_arrays(depth, selected.get("color"), config.video.max_depth)
-            if len(vertices):
-                storage.write_ply(cloud_path, vertices, colors)
-                quality.cloud_saved = True
-        if preview:
-            images = []
-            for name, frame in selected.items():
-                raw = np.asanyarray(frame.get_data())
-                images.append(processing.depth_image(raw, frame.get_units(), config.video.max_depth)
-                              if name == "depth" else raw)
-            preview.show(images)
+        save_snapshot(folder, selected, quality, config.video.max_depth)
+        if config.command == "pointcloud":
+            export_pointcloud(depth, selected.get("color"), cloud_path, quality, config.video.max_depth)
+        show_preview(preview, selected, config.video.max_depth)
         return new
 
     def finished():
-        return ((config.command == "snapshot" and quality.saved)
+        return not config.output.preview and ((config.command == "snapshot" and quality.saved)
                 or (config.command == "pointcloud" and quality.cloud_saved))
 
-    try:
-        with capture.pipeline_session(cfg) as (pipe, profile):
-            active_profiles = [device.profile_info(p) for p in profile.get_streams()]
-            diagnostics.log("已启动：" + json.dumps(active_profiles, ensure_ascii=False))
-            if config.output.preview:
-                preview = Preview()
-            stats = capture.collect(pipe, config.capture, consume, expected, preview, finished)
-    finally:
-        if preview:
-            preview.destroy()
+    with capture.pipeline_session(cfg) as (pipe, profile):
+        active_profiles = [device.profile_info(p) for p in profile.get_streams()]
+        status.set_profiles(active_profiles)
+        status.note("采集中")
+        with preview_session(config.output.preview) as preview:
+            stats = capture.collect(pipe, config.capture, consume, expected, preview, finished,
+                                    report=partial(diagnostics.display_capture_status, status))
     summary = diagnostics.summarize_video(stats, device.device_info(camera), active_profiles, config, quality)
-    diagnostics.log(json.dumps(summary, ensure_ascii=False, indent=2))
     if "depth" in expected and not quality.valid_depth_frames:
         diagnostics.log("深度图全为 0：收到帧不等于测距有效，请检查场景、距离和采集状态。")
     if quality.color_statistics and quality.color_statistics["max"] <= 1:
@@ -125,19 +132,23 @@ def run_video(config: ExperimentConfig) -> int:
         diagnostics.log(f"录像：{recording}。请结合统计判断，文件存在不代表录到了有效数据。")
     if config.command == "pointcloud":
         storage.write_json(cloud_path.with_suffix(".json"), summary)
+    diagnostics.report_result(status, summary)
     return diagnostics.result_code(stats, summary)
 
 
 def run_imu(config: ExperimentConfig) -> int:
+    with diagnostics.status_session("imu") as status:
+        return _run_imu(config, status)
+
+
+def _run_imu(config: ExperimentConfig, status: diagnostics.CaptureStatus) -> int:
     camera = device.select_device(config.serial)
     cfg = capture.configure_imu(camera.get_info(rs.camera_info.serial_number), config.accel_fps, config.gyro_fps)
     path = config.output.output or storage.output_path("imu", ".csv")
     seen = {}
-    last_print = 0.0
     columns = ["stream", "frame_number", "timestamp_ms", "timestamp_domain", "x", "y", "z", "unit"]
     with storage.csv_output(path, columns) as writer:
         def consume(frames):
-            nonlocal last_print
             received = set()
             for frame in frames:
                 name = frame.profile.stream_type().name
@@ -149,16 +160,15 @@ def run_imu(config: ExperimentConfig) -> int:
                 unit = "m/s^2" if name == "accel" else "rad/s"
                 writer.writerow([name, frame.get_frame_number(), frame.get_timestamp(),
                                  frame.get_frame_timestamp_domain().name, data.x, data.y, data.z, unit])
-                if time.monotonic() - last_print >= 1:
-                    diagnostics.log(f"{name}: ({data.x:.4f}, {data.y:.4f}, {data.z:.4f}) {unit}")
-                    last_print = time.monotonic()
             return received
 
         with capture.pipeline_session(cfg) as (pipe, profile):
-            diagnostics.log("已启动：" + json.dumps([device.profile_info(p) for p in profile.get_streams()]))
-            stats = capture.collect(pipe, replace(config.capture, frames=0), consume, ["accel", "gyro"])
+            status.set_profiles([device.profile_info(p) for p in profile.get_streams()])
+            status.note("采集中")
+            stats = capture.collect(pipe, replace(config.capture, frames=0), consume, ["accel", "gyro"],
+                                    report=partial(diagnostics.display_capture_status, status))
     summary = diagnostics.summarize_imu(stats, device.device_info(camera), config)
     storage.write_json(path.with_suffix(".json"), summary)
-    diagnostics.log(json.dumps(summary, ensure_ascii=False, indent=2))
     diagnostics.log(f"IMU CSV：{path}")
+    diagnostics.report_result(status, summary)
     return diagnostics.result_code(stats, summary)

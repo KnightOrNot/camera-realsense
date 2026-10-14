@@ -47,36 +47,39 @@ camera-realsense/
 ├── src/camera_realsense/
 │   ├── __init__.py                # 公共配置和结果类型的导出
 │   ├── cli.py                     # 命令行解析、参数校验、命令分发
+│   ├── arguments.py               # 每个参数的独立注册函数与取值校验
 │   ├── models.py                  # 配置对象、采集统计、处理结果
 │   ├── device.py                  # 设备枚举、标定、传感器选项
 │   ├── capture.py                 # 流配置、pipeline 生命周期、采集轮询
 │   ├── processing.py              # 测距、伪彩、对齐、点云、快照准备
 │   ├── storage.py                 # PNG / NPY / JSON / CSV / PLY 写入
 │   ├── preview.py                 # 可选的 Tk 图像窗口
-│   ├── diagnostics.py             # 帧率评估、PASS / FAIL、控制台报告
+│   ├── diagnostics.py             # 单行状态刷新、帧率评估、PASS / FAIL
 │   └── experiments.py             # 组合上述模块，执行视频与 IMU 实验
 ├── tests/                        # 离线数据完整性及异常路径测试
 ├── typings/                      # pyrealsense2 的本地类型声明
-└── scripts/
-    └── generate_realsense_stubs.py
+└── scripts/                      # 其他独立脚本
 ```
 
 | 模块 | 主要接口 | 后续扩展位置 |
 | --- | --- | --- |
 | `cli.py` | `build_parser()`、`to_experiment_config()`、`main()` | 新命令、命令行参数与校验 |
+| `arguments.py` | 各参数的 `add_*_argument()`、取值校验函数 | 独立注册参数，再组合到所需命令 |
 | `models.py` | `CaptureConfig`、`VideoConfig`、`OutputConfig`、`ExperimentConfig`、`CaptureStats` | 新配置字段、共享结果类型 |
 | `device.py` | `select_device()`、`show_info()`、`read_calibration()`、`camera_options()`、`set_option()` | 多设备选择、更多相机设置 |
 | `capture.py` | `configure_video()`、`configure_imu()`、`pipeline_session()`、`collect()` | 新输入流、采集策略；统一释放相机 |
 | `processing.py` | `measure_depth()`、`depth_image()`、`align_to_color()`、`cloud_arrays()`、`prepare_snapshot()` | 深度滤波、图像算法、点云处理 |
 | `storage.py` | `save_images()`、`csv_output()`、`write_json()`、`write_ply()`、`prepare_recording()` | 新文件格式和目录规则 |
-| `preview.py` | `Preview` | 新的显示方式和窗口交互 |
-| `diagnostics.py` | `slow_streams()`、`summarize_video()`、`summarize_imu()`、`result_code()` | 新质量指标和结果判定规则 |
-| `experiments.py` | `run_video()`、`run_imu()` | 组合采集、处理和输出的新业务流程 |
+| `preview.py` | `preview_session()`、`show_preview()`、`Preview` | 统一创建、显示与清理窗口 |
+| `diagnostics.py` | `display_capture_status()`、`format_capture_status()`、`status_session()`、`summarize_video()`、`summarize_imu()` | 单行状态、新质量指标和结果判定规则 |
+| `experiments.py` | `run_video()`、`run_imu()`、`save_snapshot()`、`export_pointcloud()`、`update_video_quality()` | 组合参数对应的功能函数，执行实验 |
 
 调用流程：`cli → experiments → device / capture / processing / storage / preview / diagnostics`。
 配置和结果通过 `models` 中的对象传递，只有 `cli.py` 使用 `argparse.Namespace`。
 `collect()` 负责轮询、每路超时和统计，通过回调交给实验层处理帧；
 `pipeline_session()` 在正常结束、处理报错或中断时释放已经启动的相机。
+`collect()` 通过状态回调调用 `display_capture_status()`，界面和采集统计分别处理。
+`preview_session()` 根据 `--preview` 创建及清理窗口，`show_preview()` 统一显示当前帧。
 
 `processing.prepare_snapshot()` 将 SDK 帧复制成图像数组与元数据，
 `storage.save_images()` 接收这些结果并落盘，不负责访问相机。
@@ -111,6 +114,30 @@ exit_code = run_video(config)
 新增算法通常只需放入 `processing.py` 并由 `experiments.py` 调用；新增独立功能时，
 再在 `cli.py` 注册子命令。`config/default.toml` 当前只是预留文件，修改它不会改变运行参数。
 
+### 参数与函数的对应关系
+
+每个现有参数在 `arguments.py` 中都有独立注册函数；`cli.py` 组合这些函数并将参数
+转换为配置对象，再调用下表中的功能。参数定义和功能实现分别封装，便于多个命令复用。
+
+| 参数 | 注册函数（`arguments.py`） | 功能函数 |
+| --- | --- | --- |
+| `--serial` | `add_serial_argument()` | `device.select_device()` |
+| `--profiles` | `add_profiles_argument()` | `device.show_info()` |
+| `--width`、`--height`、`--fps` | `add_width_argument()`、`add_height_argument()`、`add_fps_argument()` | `capture.configure_video()`；标定命令使用 `device.read_calibration()` |
+| `--color-width`、`--color-height`、`--color-fps` | `add_color_width_argument()`、`add_color_height_argument()`、`add_color_fps_argument()` | `capture.configure_video()` |
+| `--duration`、`--timeout-ms`、`--max-timeouts` | `add_duration_argument()`、`add_timeout_argument()`、`add_max_timeouts_argument()` | `capture.collect()` |
+| `--frames`、`--warmup-frames` | `add_frames_argument()`、`add_warmup_frames_argument()` | `capture.frame_target_reached()`、`capture.warmup_complete()` |
+| `--min-fps-ratio` | `add_min_fps_ratio_argument()` | `diagnostics.slow_streams()` |
+| `--pixel` | `add_pixel_argument()` | `processing.measure_depth()`，由 `experiments.update_video_quality()` 调用 |
+| `--max-depth` | `add_max_depth_argument()` | `processing.depth_image()`、`processing.cloud_arrays()` |
+| `--preview` | `add_preview_argument()` | `preview.preview_session()`、`preview.show_preview()` |
+| `--output-dir` | `add_output_dir_argument()` | `experiments.save_snapshot()`、`storage.write_json()` |
+| `--stream`、`--colored` | `add_stream_argument()`、`add_colored_argument()` | `experiments.video_mode()`；彩色点云由 `experiments.export_pointcloud()` 导出 |
+| `--output` | `add_output_argument()` | 按命令调用 `storage.write_json()`、`storage.csv_output()`、`storage.write_ply()` 或 `capture.enable_recording()` |
+| `--accel-fps`、`--gyro-fps` | `add_accel_fps_argument()`、`add_gyro_fps_argument()` | `capture.configure_imu()` |
+| `--sensor` | `add_sensor_argument()` | `device.get_sensor()` |
+| `--option`、`--value`、`--restore-after` | `add_option_argument()`、`add_value_argument()`、`add_restore_after_argument()` | `device.set_option()` |
+
 ## 3. 命令总览
 
 | 功能 | 子命令 | 默认模式 / 输出 |
@@ -136,6 +163,43 @@ exit_code = run_video(config)
 
 先枚举设备，再分别验证深度、彩色、红外和 IMU；单流稳定后再测试双流、对齐及点云。
 所有示例都可以独立复制执行。测试稳定性时建议采集 30 秒，保留 `--frames 0` 的默认值。
+
+### 单行状态与统一预览
+
+视频采集过程中，终端在同一行刷新当前模式、实际起流分辨率和实测 FPS，例如：
+
+```text
+mode=depth | depth=480x270@29.8fps
+mode=rgb | rgb=640x480@29.9fps
+mode=rgbd | depth=640x480@29.8fps | rgb=424x240@14.9fps
+```
+
+这些数值是显示格式示例。`color` 命令的模式显示为 `rgb`，命令名称保持 `color`。
+`align`、RGB-D 截图/录像和彩色点云显示为 `rgbd`；红外显示为 `infrared`。
+分辨率来自 SDK 实际启用的输入流，RGB-D 分别列出两路数据。
+FPS 按每路帧号去重后在最近约 1 秒的窗口内计算，约每 0.25 秒刷新；
+它是实际接收帧率，可能低于 `--fps` 设置的目标值。尚未收到帧时显示 0，停帧后也会回落到 0。
+
+测距、有效深度比例、超时提示、保存路径和最终结果显示在同一行的后部。
+终端较窄时会截断后部信息以避免折行。结束或 Ctrl+C 后补一个换行，使下一个 shell 提示符正常显示。
+输出重定向到文件时只写一条最终状态，不输出反复刷新的控制字符。
+完整统计不再逐行打印 JSON，可使用 `--output-dir` 保存 `summary.json`；
+其中 `average_fps` 仍是整个实验的均值，`depth_measurement` 记录最后一次像素测距。
+
+以下所有图像采集命令均可追加 `--preview`：
+`depth`、`color`、`infrared`、`rgbd`、`align`、`snapshot`、`pointcloud`、`record`。
+共享预览函数显示彩色 RGB、红外灰度或深度伪彩图，双流并排显示；Q / Esc / 关窗结束采集。
+未指定 `--preview` 时不会创建 Tk 窗口。
+
+```bash
+uv run camera-realsense depth --fps 30 --duration 30 --preview
+uv run camera-realsense color --width 640 --height 480 --fps 30 --duration 30 --preview
+uv run camera-realsense rgbd --fps 30 --duration 30 --preview
+```
+
+选择参数仍应以 `info --profiles` 为准。IMU 同样使用单行刷新，显示 `mode=imu` 和两路实测 Hz，
+它没有图像分辨率或图像预览。`info`、`calibration`、`options` 和 `set-option` 不进行图像采集，
+保留各自的信息输出。
 
 ### 设备信息与可用参数
 
@@ -258,6 +322,7 @@ uv run camera-realsense snapshot --stream rgbd --warmup-frames 5 --output-dir ca
 ```
 
 默认等待第一组完整图像，保存后结束，最长等待 `--duration` 秒。
+加上 `--preview` 时，保存后继续显示当前采集图像，直到时长/帧数目标或关窗；文件只保存一次。
 即使深度全为 0，也保存原始图用于诊断，但结果会标记为 `FAIL`。
 相机刚起流时自动曝光可能尚未收敛。可加 `--warmup-frames 5`，接收到 5 组完整帧后再保存；
 预热帧仍计入帧数、帧率和超时统计。如果还指定 `--frames`，该目标也包含预热帧。
@@ -304,6 +369,7 @@ uv run camera-realsense pointcloud --max-depth 6 --duration 30 \
 PLY 可用 MeshLab、CloudCompare 或 Open3D 打开。旁边的 `.json` 保存测试结果。
 没有有效点时不会生成空 PLY；`--preview` 显示输入图像，不是交互式 3D 点云窗口。
 点云也支持 `--warmup-frames 5`，用于等待曝光和深度收敛。
+加上 `--preview` 时，导出后继续预览输入图像，直到时长/帧数目标或关窗；PLY 只导出一次。
 
 ### 录制相机原始数据
 
@@ -371,7 +437,8 @@ uv run camera-realsense set-option --sensor depth --option enable_auto_exposure 
 | `--preview` | 关闭 | 显示输入图像；Q / Esc / 关窗停止 |
 | `--output-dir PATH` | 不保存图片 | 保存第一组完整图像及统计；snapshot 默认生成时间戳目录 |
 
-`snapshot` 和 `pointcloud` 完成保存后会提前结束，即使还未达到 `--duration`。
+`snapshot` 和 `pointcloud` 未加 `--preview` 时，完成保存后会提前结束，即使还未达到 `--duration`。
+加上 `--preview` 时会继续预览到时长/帧数目标或关窗。
 IMU 支持 `--serial`、`--duration`、`--timeout-ms`、`--max-timeouts`、`--min-fps-ratio`，
 并有独立的 `--accel-fps`、`--gyro-fps` 和 `--output`。
 
@@ -422,8 +489,18 @@ IMU 在 3 秒内收到 accel 35 帧、gyro 36 帧，约 11.66 / 12.00 Hz，
 低于请求的 200 Hz，仍按原有帧率规则判为 `FAIL`。本次拆分没有解决该采样率问题。
 复核的输出和完整日志保存在 `/tmp/realsense-refactor/`，属于临时测试数据。
 
+单行状态与共享预览改进后再次短测：单深度和单彩色 640×480 @30 的最后滚动帧率
+均约 30 FPS；3 秒全程均值分别约 26.98 和 27.32 FPS，包含首帧等待。
+RGB-D 双流预览的最后滚动帧率约 24 FPS，两路全程均值约 19.58 / 20.58 FPS；
+状态行如实显示接收帧率，没有用请求的 30 FPS 替代。
+截图开启预览后继续采集到 2 秒时限，窗口正常关闭；四项短测均为 `PASS`，
+每个命令的重定向标准输出均只有一条最终状态。
+这些复核数据位于临时目录 `/tmp/realsense-status-check/`。
+
 离线测试覆盖无帧退出、单路停帧、低帧率判定、设置恢复、原始深度精度、
-点云米制坐标、RGB 映射，以及模块拆分后 pipeline 在报错和中断时的资源释放，共 10 项通过。
+点云米制坐标、RGB 映射，以及 pipeline 在报错和中断时的资源释放。
+本次单行状态和预览改进后共 20 项通过，还覆盖双流独立 FPS、停帧回落到 0、
+单行清除与收尾、输出重定向、参数校验，以及截图预览继续采集且不重复计数。
 支持列表和单次 PASS 不等于所有功能在当前连接上始终稳定；建议按上述命令继续做 30 秒实验。
 
 ## 7. 开发检查
@@ -436,14 +513,9 @@ uv run python -m unittest discover -s tests -v
 ```
 
 离线测试通过 SDK 的软件设备构造帧，不需要连接实体相机。
-类型检查范围为 `src/`、`tests/` 和类型声明生成脚本。
+类型检查范围为 `src/` 和 `tests/`。
 `typings/` 为 Pylance / Pyright 提供 SDK 类型信息，运行相机程序不依赖它。
-升级 `pyrealsense2` 后如需重新生成类型声明：
-
-```bash
-uv run python scripts/generate_realsense_stubs.py
-uv run pyright
-```
+升级 `pyrealsense2` 后应同步检查类型声明是否仍与 SDK 对应。
 
 ## 8. 参考资料
 

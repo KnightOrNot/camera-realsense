@@ -13,8 +13,8 @@ import numpy as np
 import pyrealsense2 as rs
 from PIL import Image
 
-from camera_realsense import capture, cli, device, diagnostics, processing, storage
-from camera_realsense.models import CaptureConfig, CaptureStats
+from camera_realsense import capture, cli, device, diagnostics, experiments, preview, processing, storage
+from camera_realsense.models import CaptureConfig, CaptureStats, ExperimentConfig, OutputConfig, VideoConfig
 
 
 class Clock:
@@ -161,6 +161,38 @@ class DepthDataTests(unittest.TestCase):
             self.assertAlmostEqual(self.depth.get_distance(0, 0), 1)
             preview = np.asarray(Image.open(folder / "depth_preview.png"))
             np.testing.assert_array_equal(preview[0, 1], [0, 0, 0])
+
+    def test_snapshot_preview_continues_after_save_and_deduplicates_frames(self):
+        clock = Clock()
+        pipe, camera, window = Mock(), Mock(), Mock()
+        camera.supports.return_value = False
+        pipe.start.return_value.get_streams.return_value = [self.profile]
+        frames = SimpleNamespace(first_or_default=lambda _: self.depth)
+
+        def poll():
+            clock.now += 0.1
+            return frames
+
+        pipe.poll_for_frames.side_effect = poll
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(device, "select_device", return_value=camera), \
+                patch.object(capture, "configure_video", return_value=(rs.config(), ["depth"])), \
+                patch.object(capture.rs, "pipeline", return_value=pipe), \
+                patch.object(preview, "Preview", return_value=window), \
+                patch.object(capture.time, "monotonic", lambda: clock.now), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            config = ExperimentConfig(command="snapshot", capture=CaptureConfig(duration=0.6, min_fps_ratio=0),
+                                      video=VideoConfig(width=16, height=16),
+                                      output=OutputConfig(output_dir=Path(directory), preview=True))
+            self.assertEqual(experiments.run_video(config), 0)
+            summary = json.loads((Path(directory) / "summary.json").read_text())
+            self.assertEqual(summary["reason"], "duration")
+            self.assertEqual(summary["counts"], {"depth": 1})
+            self.assertGreater(pipe.poll_for_frames.call_count, 1)
+            self.assertEqual(window.show.call_count, 1)
+            self.assertEqual(len(output.getvalue().splitlines()), 1)
+        window.destroy.assert_called_once_with()
+        pipe.stop.assert_called_once_with()
 
     def test_pointcloud_uses_meters_and_rejects_invalid_and_distant_points(self):
         vertices, colors = processing.cloud_arrays(self.depth, None, 3)

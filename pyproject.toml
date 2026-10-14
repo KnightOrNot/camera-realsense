@@ -30,7 +30,7 @@ dev = [
 ]
 
 [tool.pyright]
-include = ["src", "tests", "scripts/generate_realsense_stubs.py"]
+include = ["src", "tests"]
 extraPaths = ["src"]
 stubPath = "typings"
 venvPath = "."

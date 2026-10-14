@@ -71,6 +71,7 @@ class VideoQuality:
     aligned_valid_frames: int = 0
     units_m: float | None = None
     color_statistics: dict | None = None
+    measurement: DepthMeasurement | None = None
 
 
 @dataclass(frozen=True)
