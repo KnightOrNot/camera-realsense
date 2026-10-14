@@ -123,6 +123,7 @@ class ArgumentValidationTests(unittest.TestCase):
         cases = [["depth", "--frames", "-1"], ["depth", "--warmup-frames", "-1"],
                  ["depth", "--min-fps-ratio", "nan"], ["depth", "--min-fps-ratio", "1.1"],
                  ["imu", "--duration", "inf"], ["depth", "--timeout-ms", "0"],
+                 ["depth", "--duration", "-1"], ["depth", "--duration", "nan"],
                  ["set-option", "--option", "exposure", "--value", "nan"],
                  ["set-option", "--option", "exposure", "--value", "1", "--restore-after", "-1"]]
         with patch.object(device, "select_device") as select, contextlib.redirect_stderr(io.StringIO()):

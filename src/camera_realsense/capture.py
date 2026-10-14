@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from contextlib import contextmanager
 from typing import Callable
@@ -15,6 +16,8 @@ from .models import CaptureConfig, CaptureStats, VideoConfig
 def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finished=None,
             report: Callable[[CaptureStats, float, bool], None] | None = None) -> CaptureStats:
     """Poll with per-stream watchdogs; even an empty stream has a finite deadline."""
+    if not math.isfinite(config.duration) or config.duration < 0:
+        raise ValueError("duration 必须是非负有限数值；0 表示不限时。")
     stats = CaptureStats(counts={name: 0 for name in expected})
     start = time.monotonic()
     last_seen: dict[str, float] = {name: start for name in expected}
@@ -23,7 +26,7 @@ def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finish
     try:
         if report:
             report(stats, start, True)
-        while time.monotonic() - start < config.duration:
+        while not duration_reached(config, start, time.monotonic()):
             if preview and not preview.pump():
                 stats.reason = "window closed"
                 break
@@ -68,6 +71,11 @@ def collect(pipe, config: CaptureConfig, consume, expected, preview=None, finish
         if report:
             report(stats, end, True)
     return stats
+
+
+def duration_reached(config: CaptureConfig, start: float, now: float) -> bool:
+    """A zero duration disables only the time limit, not other stop conditions."""
+    return config.duration != 0 and now - start >= config.duration
 
 
 def frame_target_reached(config: CaptureConfig, stats: CaptureStats) -> bool:

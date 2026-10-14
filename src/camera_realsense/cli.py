@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import sys
 
-from . import arguments, device, diagnostics
+from . import arguments, configuration, device, diagnostics
 from .experiments import run_imu, run_video, video_mode
 from .models import CaptureConfig, ExperimentConfig, OutputConfig, VideoConfig
 from .storage import write_json
@@ -18,10 +20,8 @@ def add_capture_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_video_arguments(parser: argparse.ArgumentParser, command: str) -> None:
-    width, height = ((424, 240) if command == "color" else
-                     ((640, 480) if command in ("rgbd", "align", "snapshot", "record", "pointcloud") else (480, 270)))
-    arguments.add_width_argument(parser, width)
-    arguments.add_height_argument(parser, height)
+    arguments.add_width_argument(parser)
+    arguments.add_height_argument(parser)
     for register in (arguments.add_fps_argument, arguments.add_color_width_argument,
                      arguments.add_color_height_argument, arguments.add_color_fps_argument,
                      arguments.add_frames_argument, arguments.add_warmup_frames_argument,
@@ -36,10 +36,15 @@ def add_video_arguments(parser: argparse.ArgumentParser, command: str) -> None:
         arguments.add_colored_argument(parser)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RealSense USB2 功能测试；默认有限时采集并报告超时。")
+def build_parser(config_path: Path | None = None) -> argparse.ArgumentParser:
+    defaults = configuration.load_defaults(config_path)
+    parser = argparse.ArgumentParser(description="RealSense 功能测试；默认值读取 TOML，显式参数优先。",
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    arguments.add_config_argument(parser)
+    parser.set_defaults(config=defaults.path)
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
+    arguments.add_config_argument(common)
     arguments.add_serial_argument(common)
     timed = argparse.ArgumentParser(add_help=False)
     add_capture_arguments(timed)
@@ -70,35 +75,32 @@ def build_parser() -> argparse.ArgumentParser:
     for command, description in descriptions.items():
         p = sub.add_parser(command, parents=[common, timed], help=description)
         add_video_arguments(p, command)
+    for command, p in sub.choices.items():
+        p.formatter_class = argparse.ArgumentDefaultsHelpFormatter
+        p.epilog = f"默认值来源：{defaults.path}；显式参数优先。"
+        configuration.apply_defaults(p, command, defaults)
     return parser
 
 
 def capture_config_from_args(args: argparse.Namespace) -> CaptureConfig:
-    return CaptureConfig(duration=args.duration, timeout_ms=args.timeout_ms, max_timeouts=args.max_timeouts,
-                         frames=getattr(args, "frames", 0), warmup_frames=getattr(args, "warmup_frames", 0),
-                         min_fps_ratio=args.min_fps_ratio)
+    return to_experiment_config(args).capture
 
 
 def video_config_from_args(args: argparse.Namespace) -> VideoConfig:
-    pixel = getattr(args, "pixel", None)
-    return VideoConfig(width=getattr(args, "width", 640), height=getattr(args, "height", 480),
-                       fps=getattr(args, "fps", 5), color_width=getattr(args, "color_width", None),
-                       color_height=getattr(args, "color_height", None), color_fps=getattr(args, "color_fps", None),
-                       pixel=tuple(pixel) if pixel is not None else None, max_depth=getattr(args, "max_depth", 3))
+    return to_experiment_config(args).video
 
 
 def output_config_from_args(args: argparse.Namespace) -> OutputConfig:
-    return OutputConfig(output=getattr(args, "output", None), output_dir=getattr(args, "output_dir", None),
-                        preview=getattr(args, "preview", False))
+    return to_experiment_config(args).output
 
 
 def to_experiment_config(args: argparse.Namespace) -> ExperimentConfig:
     """Translate command arguments once; other modules never depend on Namespace."""
-    return ExperimentConfig(command=args.command, serial=args.serial,
-                            capture=capture_config_from_args(args), video=video_config_from_args(args),
-                            output=output_config_from_args(args), stream=getattr(args, "stream", "depth"),
-                            colored=getattr(args, "colored", False), accel_fps=getattr(args, "accel_fps", 200),
-                            gyro_fps=getattr(args, "gyro_fps", 200))
+    values = args._defaults.for_command(args.command)
+    values.update(vars(args))
+    if values["pixel"] is not None:
+        values["pixel"] = tuple(values["pixel"])
+    return ExperimentConfig.from_values(args.command, values)
 
 
 def execute_command(args: argparse.Namespace) -> int:
@@ -124,7 +126,15 @@ def execute_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else argv
+    initial = argparse.ArgumentParser(add_help=False)
+    arguments.add_config_argument(initial)
+    selected, _ = initial.parse_known_args(argv)
+    try:
+        parser = build_parser(getattr(selected, "config", None))
+    except ValueError as exc:
+        initial.error(str(exc))
+    args = parser.parse_args(argv)
     if args.command in ("info", "calibration", "options", "set-option"):
         return execute_command(args)
     config = to_experiment_config(args)

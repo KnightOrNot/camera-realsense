@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .configuration import default_value, load_defaults
 
 if TYPE_CHECKING:
     import numpy as np
@@ -22,44 +24,58 @@ class CaptureStats:
 
 @dataclass(frozen=True)
 class CaptureConfig:
-    duration: float = 15
-    timeout_ms: int = 5000
-    max_timeouts: int = 2
-    frames: int = 0
-    warmup_frames: int = 0
-    min_fps_ratio: float = 0.5
+    duration: float = field(default_factory=lambda: default_value("capture", "duration"))
+    timeout_ms: int = field(default_factory=lambda: default_value("capture", "timeout_ms"))
+    max_timeouts: int = field(default_factory=lambda: default_value("capture", "max_timeouts"))
+    frames: int = field(default_factory=lambda: default_value("capture", "frames"))
+    warmup_frames: int = field(default_factory=lambda: default_value("capture", "warmup_frames"))
+    min_fps_ratio: float = field(default_factory=lambda: default_value("capture", "min_fps_ratio"))
 
 
 @dataclass(frozen=True)
 class VideoConfig:
-    width: int = 640
-    height: int = 480
-    fps: int = 5
-    color_width: int | None = None
-    color_height: int | None = None
-    color_fps: int | None = None
-    pixel: tuple[int, int] | None = None
-    max_depth: float = 3
+    width: int = field(default_factory=lambda: default_value("video", "width"))
+    height: int = field(default_factory=lambda: default_value("video", "height"))
+    fps: int = field(default_factory=lambda: default_value("video", "fps"))
+    color_width: int | None = field(default_factory=lambda: default_value("video", "color_width"))
+    color_height: int | None = field(default_factory=lambda: default_value("video", "color_height"))
+    color_fps: int | None = field(default_factory=lambda: default_value("video", "color_fps"))
+    pixel: tuple[int, int] | None = field(default_factory=lambda: default_value("video", "pixel"))
+    max_depth: float = field(default_factory=lambda: default_value("video", "max_depth"))
 
 
 @dataclass(frozen=True)
 class OutputConfig:
-    output: Path | None = None
-    output_dir: Path | None = None
-    preview: bool = False
+    output: Path | None = field(default_factory=lambda: default_value("output", "output"))
+    output_dir: Path | None = field(default_factory=lambda: default_value("output", "output_dir"))
+    preview: bool = field(default_factory=lambda: default_value("output", "preview"))
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
     command: str
-    serial: str | None = None
+    serial: str | None = field(default_factory=lambda: default_value("common", "serial"))
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    stream: str = "depth"
-    colored: bool = False
-    accel_fps: int = 200
-    gyro_fps: int = 200
+    stream: str = field(default_factory=lambda: default_value("video", "stream"))
+    colored: bool = field(default_factory=lambda: default_value("video", "colored"))
+    accel_fps: int = field(default_factory=lambda: default_value("imu", "accel_fps"))
+    gyro_fps: int = field(default_factory=lambda: default_value("imu", "gyro_fps"))
+
+    @classmethod
+    def from_values(cls, command: str, values: dict[str, Any]) -> ExperimentConfig:
+        return cls(command=command, serial=values["serial"],
+                   capture=CaptureConfig(**{f.name: values[f.name] for f in fields(CaptureConfig)}),
+                   video=VideoConfig(**{f.name: values[f.name] for f in fields(VideoConfig)}),
+                   output=OutputConfig(**{f.name: values[f.name] for f in fields(OutputConfig)}),
+                   stream=values["stream"], colored=values["colored"],
+                   accel_fps=values["accel_fps"], gyro_fps=values["gyro_fps"])
+
+    @classmethod
+    def from_defaults(cls, command: str, config_path: Path | None = None) -> ExperimentConfig:
+        """Apply the same command-specific TOML defaults as the CLI."""
+        return cls.from_values(command, load_defaults(config_path).for_command(command))
 
 
 @dataclass

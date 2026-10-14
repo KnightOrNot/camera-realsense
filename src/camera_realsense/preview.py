@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from .processing import depth_image
+from .configuration import default_value
 
 
 class Preview:
@@ -67,10 +68,12 @@ def preview_session(enabled: bool):
             preview.destroy()
 
 
-def show_preview(preview: Preview | None, frames: dict, max_depth: float = 3) -> None:
+def show_preview(preview: Preview | None, frames: dict, max_depth: float | None = None) -> None:
     """Show depth pseudocolor, RGB and infrared, shared by all video commands."""
     if preview is None:
         return
+    if max_depth is None:
+        max_depth = float(default_value("video", "max_depth"))
     images = []
     for name, frame in frames.items():
         raw = np.asanyarray(frame.get_data())

@@ -8,6 +8,7 @@ import time
 import pyrealsense2 as rs
 
 from .diagnostics import log
+from .configuration import command_default
 
 
 def device_info(device) -> dict:
@@ -41,7 +42,9 @@ def profile_info(profile) -> dict:
     return result
 
 
-def show_info(serial: str | None = None, profiles: bool = False) -> dict:
+def show_info(serial: str | None = None, profiles: bool | None = None) -> dict:
+    if profiles is None:
+        profiles = command_default("info", "profiles")
     device = select_device(serial)
     result = device_info(device)
     result["sensors"] = []
@@ -53,7 +56,12 @@ def show_info(serial: str | None = None, profiles: bool = False) -> dict:
     return result
 
 
-def read_calibration(serial: str | None = None, width: int = 640, height: int = 480, fps: int = 5) -> dict:
+def read_calibration(serial: str | None = None, width: int | None = None,
+                     height: int | None = None, fps: int | None = None) -> dict:
+    if width is None or height is None or fps is None:
+        width = command_default("calibration", "width") if width is None else width
+        height = command_default("calibration", "height") if height is None else height
+        fps = command_default("calibration", "fps") if fps is None else fps
     device = select_device(serial)
     profiles = {}
     for sensor in device.query_sensors():
@@ -94,7 +102,9 @@ def get_sensor(device, name: str):
     raise ValueError(f"相机没有 {name} 传感器。")
 
 
-def camera_options(serial: str | None = None, sensor_name: str = "depth") -> int:
+def camera_options(serial: str | None = None, sensor_name: str | None = None) -> int:
+    if sensor_name is None:
+        sensor_name = str(command_default("options", "sensor"))
     sensor = get_sensor(select_device(serial), sensor_name)
     for option in sensor.get_supported_options():
         try:
@@ -109,7 +119,11 @@ def camera_options(serial: str | None = None, sensor_name: str = "depth") -> int
 
 
 def set_option(option_name: str, value: float, *, serial: str | None = None,
-               sensor_name: str = "depth", restore_after: float = 5) -> int:
+               sensor_name: str | None = None, restore_after: float | None = None) -> int:
+    if sensor_name is None:
+        sensor_name = str(command_default("set-option", "sensor"))
+    if restore_after is None:
+        restore_after = float(command_default("set-option", "restore_after"))
     sensor = get_sensor(select_device(serial), sensor_name)
     option = getattr(rs.option, option_name, None)
     if option is None or not sensor.supports(option):

@@ -82,6 +82,74 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(sensor.value, 1)
 
 
+class UnlimitedCaptureTests(unittest.TestCase):
+    def run_capture(self, producer, config, preview_window=None, finished=None):
+        clock = Clock()
+
+        class Pipeline:
+            def poll_for_frames(self):
+                clock.now += 0.01
+                return producer()
+
+        with patch.object(capture.time, "monotonic", lambda: clock.now), \
+                patch.object(capture.time, "sleep", clock.sleep), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return capture.collect(Pipeline(), config, lambda frame: frame, ["depth"],
+                                   preview=preview_window, finished=finished)
+
+    def test_unlimited_capture_still_stops_at_frame_target(self):
+        stats = self.run_capture(lambda: {"depth"}, CaptureConfig(duration=0, frames=3))
+        self.assertEqual(stats.complete_frames, 3)
+        self.assertEqual(stats.reason, "frame target")
+        self.assertGreater(stats.elapsed_s, 0)
+
+    def test_unlimited_capture_keeps_timeout_watchdog(self):
+        stats = self.run_capture(lambda: set(), CaptureConfig(duration=0, timeout_ms=10, max_timeouts=2))
+        self.assertEqual(stats.reason, "timeout limit")
+        self.assertEqual(stats.timeouts, 2)
+        self.assertEqual(stats.counts["depth"], 0)
+
+    def test_unlimited_capture_stops_when_preview_closes(self):
+        window = Mock()
+        window.pump.side_effect = [True, True, False]
+        stats = self.run_capture(lambda: {"depth"}, CaptureConfig(duration=0), preview_window=window)
+        self.assertEqual(stats.reason, "window closed")
+        self.assertEqual(stats.counts["depth"], 2)
+
+    def test_unlimited_capture_stops_on_keyboard_interrupt(self):
+        calls = 0
+
+        def producer():
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise KeyboardInterrupt
+            return {"depth"}
+
+        stats = self.run_capture(producer, CaptureConfig(duration=0))
+        self.assertEqual(stats.reason, "interrupted")
+        self.assertEqual(stats.counts["depth"], 2)
+        self.assertEqual(diagnostics.result_code(stats, {"result": "PASS"}), 130)
+
+    def test_unlimited_capture_stops_when_artifact_is_saved(self):
+        stats = self.run_capture(lambda: {"depth"}, CaptureConfig(duration=0), finished=lambda: True)
+        self.assertEqual(stats.reason, "artifact saved")
+        self.assertEqual(stats.counts["depth"], 1)
+
+    def test_positive_duration_still_expires_without_a_frame_target(self):
+        stats = self.run_capture(lambda: {"depth"}, CaptureConfig(duration=0.05))
+        self.assertEqual(stats.reason, "duration")
+        self.assertGreaterEqual(stats.elapsed_s, 0.05)
+        self.assertGreater(stats.counts["depth"], 0)
+
+    def test_invalid_python_duration_is_rejected_before_polling(self):
+        pipe = Mock()
+        for duration in (-1, float("inf"), float("nan")):
+            with self.subTest(duration=duration), self.assertRaisesRegex(ValueError, "duration"):
+                capture.collect(pipe, CaptureConfig(duration=duration), lambda frame: set(), ["depth"])
+        pipe.poll_for_frames.assert_not_called()
+
+
 class PipelineLifetimeTests(unittest.TestCase):
     def test_processing_failure_releases_camera_and_preserves_exception(self):
         pipeline = Mock()

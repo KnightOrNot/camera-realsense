@@ -1,0 +1,76 @@
+# 默认优先级：显式 CLI 参数 > [commands.<命令>] > 公共分组。
+# 不指定 --config 时使用本文件。路径参数相对于运行命令时的工作目录。
+# 空字符串表示未指定；color_* 的 0 表示跟随主流；pixel=[] 表示图像中心。
+
+[common]
+serial = ""
+
+[capture]
+duration = 0
+timeout_ms = 5000
+max_timeouts = 2
+frames = 0
+warmup_frames = 0
+min_fps_ratio = 0.5
+
+[video]
+width = 640
+height = 480
+fps = 30
+color_width = 0
+color_height = 0
+color_fps = 0
+pixel = []
+max_depth = 3.0
+stream = "depth"
+colored = false
+
+[output]
+preview = false
+output = ""
+output_dir = ""
+
+[imu]
+accel_fps = 200
+gyro_fps = 200
+
+[commands.info]
+profiles = false
+
+[commands.calibration]
+width = 640
+height = 480
+
+[commands.options]
+sensor = "depth"
+
+[commands.set-option]
+sensor = "depth"
+restore_after = 5.0
+# 以下两个必需值未配置时必须在 CLI 提供；也可在此设置实际默认值。
+option = ""
+value = ""
+
+[commands.depth]
+width = 480
+height = 270
+
+[commands.color]
+width = 424
+height = 240
+
+[commands.infrared]
+width = 480
+height = 270
+
+[commands.rgbd]
+
+[commands.align]
+
+[commands.imu]
+
+[commands.snapshot]
+
+[commands.pointcloud]
+
+[commands.record]
