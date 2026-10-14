@@ -8,12 +8,32 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=2.4.6",
+    "opencv-python>=5.0.0.93",
+    "pillow>=12.3.0",
     "pyrealsense2>=2.59.1.11053",
+    "pyzmq>=27.2.0",
+    "tyro>=1.0.16",
 ]
 
 [project.scripts]
-camera-realsense = "camera_realsense:main"
+camera-realsense = "camera_realsense.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pybind11-stubgen>=3.0.0",
+    "pyright>=1.1.414",
+]
+
+[tool.pyright]
+include = ["src", "tests", "scripts/generate_realsense_stubs.py"]
+extraPaths = ["src"]
+stubPath = "typings"
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
