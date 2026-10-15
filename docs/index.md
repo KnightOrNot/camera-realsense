@@ -97,3 +97,7 @@ flowchart TD
 配置 dataclass 是不可变对象。修改已有对象使用 `dataclasses.replace()`；
 直接构造 `VideoConfig()` 使用 TOML 公共分组，`ExperimentConfig.from_defaults("depth")`
 还应用深度命令的覆盖值。完整例子见 [配置参考](reference/config.md)。
+
+## 应用帧接口
+
+[stream.ColorStream](stream.md) 提供可复用 RGB-D 包、SDK 时间来源及标定；不负责应用录制或 LeRobot 格式。

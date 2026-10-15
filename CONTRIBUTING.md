@@ -17,6 +17,7 @@ uv run python -m unittest discover -s tests -v
 更新依赖使用 uv 的解析/同步命令，并检查锁文件变化。
 
 代码位于 src/camera_realsense，tests 是离线测试；scripts 中其他独立程序不在主 CLI 调用链内。
+修改 stream 的启动逻辑时，覆盖启动帧号回退、双流缓存清理、时间域切换和交付后的严格失败保护；使用模拟帧，不依赖实体设备。
 Python 配置对象共享 models，参数注册放 arguments，默认值和结构校验放 configuration，
 实验流程放 experiments。不要把新功能重新集中到 __init__.py 或 argparse 回调中。
 
@@ -150,3 +151,7 @@ config 维护字段和优先级；errors 维护错误解释。新增或删除参
 CHANGELOG 描述最终行为和验证证据，不将历史短测写成设备长期稳定性保证。
 只在实际版本发布时新增发布条目并同步 pyproject 版本，当前 0.1.0 是开发状态。
 LICENSE 当前只记录未选定许可证，不是 MIT 或 Apache 许可声明。
+
+## 供应用集成的帧接口
+
+`stream.py` 独立于实验 CLI，API 参数由调用方显式传入，不能隐式读取其他应用的 TOML。保持逐流 SDK 时间来源、原生 Z16 值及深度尺度/标定，不把接收时间当曝光时间，也不把深度色彩化后用于数采。修改后运行 Pyright、全部 unittest，并联动 controller 的 RGB-D 写入/真实 LeRobot 读回测试；实体相机稳定性单独说明。

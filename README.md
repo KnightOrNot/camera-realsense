@@ -3,6 +3,8 @@
 用 `pyrealsense2` 进行 RealSense 深度、RGB、红外、IMU、对齐、截图、点云和录像实验。
 当前已在 D455F 上验证。直接安装 Python 包即可运行本项目，无需自行编译 librealsense。
 
+应用集成接口及启动预热、异常处理规则见 [RGB-D 帧接口](docs/stream.md)。
+
 采集时单行刷新输入模式、实际分辨率和实测 FPS；所有图像采集命令共用 `--preview`。
 默认参数集中在 [config/default.toml](config/default.toml)：
 **显式命令行参数 > 对应命令的配置 > 公共配置**。
@@ -70,6 +72,10 @@ fps = 30
 | [排障参考](docs/reference/errors.md) | 无设备、超时、低 FPS、权限、预览与配置错误 |
 | [开发指南](CONTRIBUTING.md) | 如何改代码、新增参数/命令、测试和更新文档 |
 | [变更记录](CHANGELOG.md) | 当前实现的变化和验证记录 |
+
+## 应用集成
+
+应用可直接使用 `camera_realsense.stream.ColorStream(depth_enabled=True)` 获取独立带时间戳的 RGB/Z16 `VideoFrame`，并读取深度尺度及内外参。采集库映射 SDK global/system 时间到主机单调时钟；应用负责生命周期、落盘和停帧策略，converter 负责跨流目标匹配。接口、默认 profile 和时钟边界见[RGB-D 帧接口](docs/stream.md)。原有实验 CLI 保持独立。
 
 ## 开发检查
 
