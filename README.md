@@ -75,6 +75,12 @@ fps = 30
 
 ## 应用集成
 
+`ColorStream(mode="auto", depth_enabled=True)` 优先探测 640×360@90、60 FPS，
+最后回退到调用者基准分辨率的 30 FPS。每路收到的帧率须达到请求值的 85%。
+`fast` 使用相同高速优先顺序，`slow` 只探测基准分辨率的 30 FPS；默认
+`manual` 精确使用调用者提供的 profile，不自动切换。探测发生在首次交付前，
+选择结果和实测速率写入 `metadata["profile_selection"]`。
+
 应用可直接使用 `camera_realsense.stream.ColorStream(depth_enabled=True)` 获取独立带时间戳的 RGB/Z16 `VideoFrame`，并读取深度尺度及内外参。采集库映射 SDK global/system 时间到主机单调时钟；应用负责生命周期、落盘和停帧策略，converter 负责跨流目标匹配。接口、默认 profile 和时钟边界见[RGB-D 帧接口](docs/stream.md)。原有实验 CLI 保持独立。
 
 ## 开发检查

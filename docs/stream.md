@@ -1,5 +1,11 @@
 # 可复用 RGB-D 帧接口
 
+应用可以显式选择 `mode="auto"` / `"fast"` / `"slow"`。auto/fast 依次尝试
+640×360@90、60 FPS 和基准分辨率@30 FPS，slow 只尝试最后一项。
+每路预热后至少采样一秒，以实际到达帧率的 85% 阈值验收；失败会停止并恢复
+该候选的设备设置后再尝试下一项。默认 `mode="manual"` 保留精确 profile。
+`metadata["profile_selection"]` 返回模式、实测速率和已拒绝的候选原因。
+
 `camera_realsense.stream` 供 controller 等应用组合，不负责机器人客户端、raw session、时间轴重采样或 LeRobot 转换。导入不打开相机；不用启动相机 CLI 子进程。
 
 ```python

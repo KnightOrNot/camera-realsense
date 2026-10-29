@@ -13,6 +13,8 @@ uv run python -m unittest discover -s tests -v
 
 命令入口由 `pyproject.toml` 的 `[project.scripts]` 注册为 `camera_realsense.cli:main`。
 普通 Python 源码或 TOML 修改在下次执行时读取；修改依赖、入口或构建配置后运行 uv sync。
+profile 策略测试位于 `tests/test_profile_selection.py`，使用假 pipeline 验证降级与资源释放。
+默认 TOML 的包内链接指向唯一的 `config/default.toml`，构建 wheel 后应验证配置读取。
 不要手动改 `.venv/bin/camera-realsense` 或 uv.lock 的依赖内容。
 更新依赖使用 uv 的解析/同步命令，并检查锁文件变化。
 

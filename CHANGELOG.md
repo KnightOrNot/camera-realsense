@@ -4,6 +4,7 @@
 
 ## 未发布 — RGB-D 应用接口
 
+- 增加显式 auto/fast/slow profile 探测与逐流 FPS 验收；默认 manual 保留调用者 profile。打包默认 TOML，使 wheel 安装后的 CLI 也能找到配置。
 - 修复启动期帧号回退直接终止的问题：首次交付前清除双流缓存并重新预热；双流共同就绪后交付，运行期异常仍失败。新增启动状态和帧号/时间域诊断。
 
 - 新增 stream.ColorStream / VideoFrame，可返回独立 RGB 与原始 Z16 深度包、深度尺度和内外参。

@@ -94,6 +94,7 @@ class ColorStream:
         depth_width: int = 640,
         depth_height: int = 480,
         depth_fps: int = 30,
+        mode: str = "manual",
     ) -> None:
         if any(
             type(v) is not int or v <= 0
@@ -104,6 +105,9 @@ class ColorStream:
             raise ValueError("warmup_frames must be non-negative")
         if type(depth_enabled) is not bool:
             raise ValueError("depth_enabled must be boolean")
+        if mode not in {"manual", "auto", "fast", "slow"}:
+            raise ValueError("mode must be manual, auto, fast or slow")
+        self.mode = mode
         self.serial, self.width, self.height, self.fps = serial, width, height, fps
         self.depth_enabled = depth_enabled
         self.depth_width, self.depth_height, self.depth_fps = (
@@ -170,6 +174,93 @@ class ColorStream:
         )
 
     def start(self) -> ColorStream:
+        if self._pipe is not None:
+            raise RuntimeError("ColorStream is already started")
+        if self.mode == "manual":
+            return self._start_profile()
+        original = (
+            self.width,
+            self.height,
+            self.fps,
+            self.depth_width,
+            self.depth_height,
+            self.depth_fps,
+        )
+        profiles = (
+            []
+            if self.mode == "slow"
+            else [
+                (640, 360, 90, 640, 360, 90),
+                (640, 360, 60, 640, 360, 60),
+            ]
+        )
+        profiles.append((original[0], original[1], 30, original[3], original[4], 30))
+        failures = []
+        for profile in profiles:
+            (
+                self.width,
+                self.height,
+                self.fps,
+                self.depth_width,
+                self.depth_height,
+                self.depth_fps,
+            ) = profile
+            try:
+                self._start_profile()
+                rates = self._probe_rates()
+                expected = {"color": self.fps}
+                if self.depth_enabled:
+                    expected["depth"] = self.depth_fps
+                if any(
+                    rates.get(name, 0) < fps * 0.85 for name, fps in expected.items()
+                ):
+                    raise RuntimeError(f"received FPS below 85% of profile: {rates}")
+                self.metadata["profile_selection"] = {
+                    "requested_mode": self.mode,
+                    "measured_fps": rates,
+                    "rejected": failures,
+                }
+                return self
+            except Exception as exc:
+                failures.append(str(exc))
+                self.close()
+        (
+            self.width,
+            self.height,
+            self.fps,
+            self.depth_width,
+            self.depth_height,
+            self.depth_fps,
+        ) = original
+        raise RuntimeError(f"no camera profile passed startup probing: {failures}")
+
+    def _probe_rates(self) -> dict[str, float]:
+        arrivals: dict[str, list[float]] = {}
+        latest: dict[str, VideoFrame] = {}
+        expected = {"color", "depth"} if self.depth_enabled else {"color"}
+        deadline = time.monotonic() + 10
+        started = None
+        while time.monotonic() < deadline:
+            frame = self.read(timeout_s=0.2)
+            if frame is None:
+                continue
+            now = time.monotonic()
+            arrivals.setdefault(frame.stream, []).append(now)
+            latest[frame.stream] = frame
+            if started is None and set(latest) == expected:
+                started = now
+            if started is not None and now - started >= 1.0:
+                rates = {
+                    name: (len(times) - 1) / (times[-1] - times[0])
+                    for name, times in arrivals.items()
+                    if len(times) >= 2 and times[-1] > times[0]
+                }
+                self._pending.clear()
+                self._pending.extend(latest.values())
+                return rates
+        raise TimeoutError(f"camera profile probe timed out: {self.startup_status}")
+
+    def _start_profile(self) -> ColorStream:
         import pyrealsense2 as rs
 
         from .capture import configure_video
@@ -215,6 +306,7 @@ class ColorStream:
                 "clock": "time.monotonic_ns",
                 "timestamp_source": "realsense_global_or_system_time",
                 "intrinsics": _intrinsics(profile.get_stream(rs.stream.color)),
+                "profile_selection": {"requested_mode": self.mode, "measured_fps": {}},
             }
             if self.depth_enabled:
                 depth = profile.get_stream(rs.stream.depth)

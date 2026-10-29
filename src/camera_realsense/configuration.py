@@ -11,6 +11,8 @@ from typing import Any
 from . import arguments
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.toml"
+if not DEFAULT_CONFIG_PATH.is_file():
+    DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "default.toml"
 GROUP_FIELDS = {
     "common": {"serial"},
     "capture": {"duration", "timeout_ms", "max_timeouts", "frames", "warmup_frames", "min_fps_ratio"},
